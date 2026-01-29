@@ -7,7 +7,7 @@
 #' @param x,y Characters to indicate the name of the two variables.
 #' @param lims The limits of the range for the vector field estimation as `c(<xl>, <xu>, <yl>, <yu>)`. If missing, the range of the data extended by 10% for both sides will be used.
 #' @param n The number of equally spaced points in each axis, at which the vectors are to be estimated.
-#' @param vector_position Only useful if `method == "VFC"`. One of "start", "middle", or "end", representing the position of the vectors. If "start", for example, the starting point of a vector is regarded as the position of the vector.
+#' @param vector_position One of "start", "middle", or "end", representing the position of the vectors. If "start", for example, the starting point of a vector is regarded as the position of the vector.
 #' @param na_action One of "omit_data_points" or "omit_vectors". If using "omit_data_points", then only the `NA` points are omitted, and the points before and after an `NA` will form a vector. If using "omit_vectors", then the vectors will be omitted if either of its points is `NA`.
 #' @param method One of "MVKE" or "VFC".
 #' @param ... Other parameters to be passed to [MVKE()] or [SparseVFC::SparseVFC()].
@@ -27,7 +27,7 @@ fit_2d_vf <- function(data, x, y,
                       n = 20,
                       vector_position = "start",
                       na_action = "omit_data_points",
-                      method = c("MVKE", "MVKE"), ...) {
+                      method = c("MVKE", "VFC"), ...) {
   d <- data
   # extract useful data for construction
   if (is.data.frame(d)) {
@@ -80,7 +80,7 @@ fit_2d_vf <- function(data, x, y,
   if (method == "VFC") {
     VFCresult <- SparseVFC::SparseVFC(original_vectors_normalized[, 1:2], original_vectors_normalized[, 3:4], ...)
   } else if (method == "MVKE") {
-    MVKEresult <- MVKE(original_vectors_normalized[, 1:2], ...)
+    MVKEresult <- MVKE(original_vectors_normalized[, 1:2], original_vectors_normalized[, 3:4], ...)
   }
 
   lims <- determine_lims(d_raw, c(x, y), lims)
@@ -128,7 +128,7 @@ determine_lims <- function(output, var_names, lims) {
   if (!rlang::is_missing(lims)) {
     return(lims)
   }
-  if (is.list(output)) output <- output[[1]]
+  # if (is.list(output)) output <- output[[1]]
   if (rlang::is_missing(lims)) {
     return(c(sapply(var_names, function(v) grDevices::extendrange(output[, v], f = 0.1))))
   }
@@ -148,32 +148,33 @@ determine_lims <- function(output, var_names, lims) {
 #' @seealso [add_interp_grid()]
 #' @export
 predict.vectorfield <- function(object, pos, linear_interp = FALSE, calculate_a = TRUE, ...) {
-	if(!linear_interp) {
-		return(
-			normalize_predict_f(object)(pos)
-		)
-	} else {
-		if(is.null(object$interp_grid)) {
-			stop("The grid for interpolation does not exist. Either use `<vf> <- add_interp_grid(<vf>)` to generate it, or use `linear_vec = TRUE`.")
-		}
-		result <- list()
-		temp <- object$interp_grid
-		result$v <- c(
-			fast_bilinear(x = temp$x, y = temp$y, z = temp$z_vector_1, x0 = pos[1], y0 = pos[2])$z,
-			fast_bilinear(x = temp$x, y = temp$y, z = temp$z_vector_2, x0 = pos[1], y0 = pos[2])$z
-			)
-		if (calculate_a) {
-			result$a <- matrix(
-				c(
-					fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_1, x0 = pos[1], y0 = pos[2])$z,
-					fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_2, x0 = pos[1], y0 = pos[2])$z,
-					fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_3, x0 = pos[1], y0 = pos[2])$z,
-					fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_4, x0 = pos[1], y0 = pos[2])$z
-				), byrow = TRUE, nrow = 2, ncol = 2
-			)
-		}
-		return(result)
-	}
+  if (!linear_interp) {
+    return(
+      normalize_predict_f(object)(pos)
+    )
+  } else {
+    if (is.null(object$interp_grid)) {
+      stop("The grid for interpolation does not exist. Either use `<vf> <- add_interp_grid(<vf>)` to generate it, or use `linear_vec = TRUE`.")
+    }
+    result <- list()
+    temp <- object$interp_grid
+    result$v <- c(
+      fast_bilinear(x = temp$x, y = temp$y, z = temp$z_vector_1, x0 = pos[1], y0 = pos[2])$z,
+      fast_bilinear(x = temp$x, y = temp$y, z = temp$z_vector_2, x0 = pos[1], y0 = pos[2])$z
+    )
+    if (calculate_a) {
+      result$a <- matrix(
+        c(
+          fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_1, x0 = pos[1], y0 = pos[2])$z,
+          fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_2, x0 = pos[1], y0 = pos[2])$z,
+          fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_3, x0 = pos[1], y0 = pos[2])$z,
+          fast_bilinear(x = temp$x, y = temp$y, z = temp$z_diffusion_4, x0 = pos[1], y0 = pos[2])$z
+        ),
+        byrow = TRUE, nrow = 2, ncol = 2
+      )
+    }
+    return(result)
+  }
 }
 
 
@@ -185,23 +186,25 @@ predict.vectorfield <- function(object, pos, linear_interp = FALSE, calculate_a 
 #' @return A `vectorfield` project with an `interp_grid` field.
 #' @export
 add_interp_grid <- function(vf, lims = vf$lims, n = vf$n) {
-	if(!is.null(vf$interp_grid)) {
-		message("There is already an `interp_grid` field in the `vectorfield`. It will be overwritten.")
-	}
-	x <- seq(lims[1], lims[2], length.out = n)
-	y <- seq(lims[3], lims[4], length.out = n)
-	z_vector_1 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$v[1]))
-	z_vector_2 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$v[2]))
-	z_diffusion_1 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[1]))
-	z_diffusion_2 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[2]))
-	z_diffusion_3 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[3]))
-	z_diffusion_4 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[4]))
-	vf$interp_grid <- list(x = x, y = y, z_vector_1 = z_vector_1, z_vector_2 = z_vector_2,
-												 z_diffusion_1 = z_diffusion_1,
-												 z_diffusion_2 = z_diffusion_2,
-												 z_diffusion_3 = z_diffusion_3,
-												 z_diffusion_4 = z_diffusion_4)
-	return(vf)
+  if (!is.null(vf$interp_grid)) {
+    message("There is already an `interp_grid` field in the `vectorfield`. It will be overwritten.")
+  }
+  x <- seq(lims[1], lims[2], length.out = n)
+  y <- seq(lims[3], lims[4], length.out = n)
+  z_vector_1 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$v[1]))
+  z_vector_2 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$v[2]))
+  z_diffusion_1 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[1]))
+  z_diffusion_2 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[2]))
+  z_diffusion_3 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[3]))
+  z_diffusion_4 <- outer(x, y, Vectorize(function(x, y) normalize_predict_f(vf)(c(x, y))$a[4]))
+  vf$interp_grid <- list(
+    x = x, y = y, z_vector_1 = z_vector_1, z_vector_2 = z_vector_2,
+    z_diffusion_1 = z_diffusion_1,
+    z_diffusion_2 = z_diffusion_2,
+    z_diffusion_3 = z_diffusion_3,
+    z_diffusion_4 = z_diffusion_4
+  )
+  return(vf)
 }
 
 #' Return a normalized prediction function
@@ -209,22 +212,22 @@ add_interp_grid <- function(vf, lims = vf$lims, n = vf$n) {
 #' @inheritParams fit_3d_vfld
 #' @return A function that takes a vector `x` and returns a list of `v`, the drift part, and `a`, the diffusion part.
 normalize_predict_f <- function(vf) {
-	if (vf$method == "VFC") {
-		f <- function(x) {
-			v <- stats::predict(vf$VFCresult, x %>% normalize_v(vf$data_normalized)) %>% scale_up(vf$data_normalized)
-			variance <- vf$VFCresult$sigma2 %>% scale_up2(vf$data_normalized)
-			a <- matrix(c(variance, 0, 0, variance), nrow = 2)
-			return(list(v = v, a = a))
-		}
-	} else if (vf$method == "MVKE") {
-		f <- function(x) {
-			result <- vf$MVKEresult(x %>% normalize_v(vf$data_normalized))
-			v <- result$mu %>% scale_up(vf$data_normalized)
-			a <- result$a %>% scale_up2(vf$data_normalized)
-			return(list(v = v, a = a))
-		}
-	}
-	return(f)
+  if (vf$method == "VFC") {
+    f <- function(x) {
+      v <- stats::predict(vf$VFCresult, x %>% normalize_v(vf$data_normalized)) %>% scale_up(vf$data_normalized)
+      variance <- vf$VFCresult$sigma2 %>% scale_up2(vf$data_normalized)
+      a <- matrix(c(variance, 0, 0, variance), nrow = 2)
+      return(list(v = v, a = a))
+    }
+  } else if (vf$method == "MVKE") {
+    f <- function(x) {
+      result <- vf$MVKEresult(x %>% normalize_v(vf$data_normalized))
+      v <- result$mu %>% scale_up(vf$data_normalized)
+      a <- result$a %>% scale_up2(vf$data_normalized)
+      return(list(v = v, a = a))
+    }
+  }
+  return(f)
 }
 
 #' A fast bilinear interpolation function
